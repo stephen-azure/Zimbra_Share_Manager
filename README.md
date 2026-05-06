@@ -2,10 +2,10 @@
 
 > **No Copyright.** This software is released to the public domain and may be freely used, modified, distributed, or incorporated into other works without restriction or attribution.
 >
-> **Disclaimer:** This software is provided "as is", without warranty of any kind, express or implied. No representation is made that it will function correctly, be fit for any particular purpose, or be free of defects. Use at your own risk.
+> **Disclaimer:** This software is provided "as is", without warranty of any kind, express or implied. No representation is made that it will function correctly, be fit for any particular purpose, or be free of defects. Use at your own risk. This application runs with no security or authentication. It is strongly recommended that it be firewalled and/or only run during use. Actions taken by the application are destructive and if accessed maliciously, could result in shares being lost without a clear recovery pathway outside of manual re-creation. - You have been warned.
 
 A Flask-based web application for auditing and managing Zimbra folder shares.
-Runs on port **8585** as the `zimbra` OS user. This application runs with no security or authentication. It is strongly recommended that it be firewalled and/or only run during use. Actions taken by the application are destructive and if accessed maliciously, could result in shares being lost without a clear recovery pathway outside of manual re-creation. - You have been warned.
+Runs on port **8585** as the `zimbra` OS user. 
 
 ---
 
