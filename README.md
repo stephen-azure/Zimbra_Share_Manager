@@ -4,7 +4,7 @@
 >
 > **Disclaimer:** This software is provided "as is", without warranty of any kind, express or implied. No representation is made that it will function correctly, be fit for any particular purpose, or be free of defects. Use at your own risk. This application runs with no security or authentication. It is strongly recommended that it be firewalled and/or only run during use. Actions taken by the application are destructive and if accessed maliciously, could result in shares being lost without a clear recovery pathway outside of manual re-creation. - You have been warned.
 
-A Flask-based web application for auditing and managing Zimbra folder shares.
+A Flask-based web application for auditing and managing Zimbra folder shares. It is specifically designed to for auditing existing shares and migrating shares to a new server. It isn't inteded or well suited for day to day share creation and management unless you want to do a large scale cleanup of current shares, or find orphaned shares missing grants/mounts.
 Runs on port **8585** as the `zimbra` OS user. 
 
 ---
