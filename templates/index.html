@@ -1,0 +1,1695 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Zimbra Share Manager</title>
+  <link
+    rel="stylesheet"
+    href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css"
+    integrity="sha384-T3c6CoIi6uLrA9TneNEoa7RxnatzjcDSCmG1MXxSR1GAsXEV/Dwwykc2MPK8M2HN"
+    crossorigin="anonymous"
+  />
+  <style>
+    body { background: #f8f9fa; }
+    .navbar-brand { font-weight: 700; letter-spacing: .05em; }
+    .card { box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+    .card-header { font-weight: 600; }
+
+    /* Audit */
+    .group-header {
+      border-left: 4px solid #0d6efd;
+      background: #e9f0ff;
+      padding: .5rem .75rem;
+      font-weight: 600;
+      font-size: .95rem;
+      margin-bottom: 0;
+    }
+    .audit-table { font-size: .875rem; margin-bottom: 0; }
+    .audit-table th { background: #f0f4ff; font-weight: 600; }
+    .row-remove  { background: rgba(220,53,69,0.15) !important; }
+    .row-orphan  { background: rgba(255,193,7,0.20) !important; }
+
+    /* Terminal block */
+    #statusPre {
+      background: #1e1e1e;
+      color: #39ff14;
+      font-size: .8rem;
+      white-space: pre-wrap;
+      word-break: break-all;
+      border-radius: 6px;
+      padding: 1rem;
+      max-height: 350px;
+      overflow-y: auto;
+    }
+
+    /* Toast */
+    #toastContainer {
+      position: fixed;
+      bottom: 1.5rem;
+      right: 1.5rem;
+      z-index: 9999;
+      min-width: 280px;
+    }
+
+    /* Progress */
+    #jobProgressContainer { display: none; }
+
+    /* Legend dots */
+    .legend-dot {
+      display: inline-block;
+      width: 14px; height: 14px;
+      border-radius: 3px;
+      margin-right: 4px;
+      vertical-align: middle;
+    }
+    .legend-orphan  { background: rgba(255,193,7,0.6); }
+    .legend-remove  { background: rgba(220,53,69,0.4); }
+
+    /* Nesting */
+    .child-row { display: none; }
+    .child-row td:nth-child(2) { padding-left: 2rem; }
+    .toggle-btn {
+      background: none; border: none; padding: 0 3px 0 0;
+      cursor: pointer; font-size: .7rem; color: #0d6efd;
+      vertical-align: middle; line-height: 1;
+    }
+    /* Grantee sub-group header within each source-account table */
+    .subgroup-row > td {
+      background: #f0f4ff;
+      font-size: .8rem;
+      font-weight: 600;
+      padding: .3rem .75rem;
+      border-top: 2px solid #c5d3f0;
+    }
+  </style>
+</head>
+<body>
+
+<!-- ===== NAVBAR ===== -->
+<nav class="navbar navbar-dark bg-primary mb-4">
+  <div class="container-fluid">
+    <span class="navbar-brand">&#128279; Zimbra Share Manager</span>
+    <span class="text-white-50 small" id="navHostname">Loading...</span>
+  </div>
+</nav>
+
+<!-- ===== TABS ===== -->
+<div class="container-fluid px-4">
+  <ul class="nav nav-tabs mb-3" id="mainTabs">
+    <li class="nav-item">
+      <a class="nav-link active" href="#" onclick="showTab('admin'); return false;">
+        Administration
+      </a>
+    </li>
+    <li class="nav-item">
+      <a class="nav-link" href="#" onclick="showTab('audit'); return false;">
+        Audit Shares <span id="auditBadge" class="badge bg-secondary ms-1" style="display:none"></span>
+      </a>
+    </li>
+    <li class="nav-item">
+      <a class="nav-link" href="#" onclick="showTab('orphaned'); return false;">
+        Orphaned Shares <span id="orphanedBadge" class="badge bg-warning text-dark ms-1" style="display:none"></span>
+      </a>
+    </li>
+  </ul>
+
+  <!-- ===== ADMIN TAB ===== -->
+  <div id="pane-admin">
+    <div class="row g-3">
+
+      <!-- Column 1: Server Info -->
+      <div class="col-md-4">
+        <div class="card h-100">
+          <div class="card-header bg-info text-white">Server Information</div>
+          <div class="card-body p-0">
+            <table class="table table-sm mb-0">
+              <tbody>
+                <tr>
+                  <th class="ps-3" style="width:45%">Hostname</th>
+                  <td id="infoHostname">—</td>
+                </tr>
+                <tr>
+                  <th class="ps-3">OS</th>
+                  <td id="infoOS">—</td>
+                </tr>
+                <tr>
+                  <th class="ps-3">Zimbra Version</th>
+                  <td id="infoVersion">—</td>
+                </tr>
+                <tr>
+                  <th class="ps-3">Manifest Status</th>
+                  <td id="infoManifest">—</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Column 2: Single Server Operations -->
+      <div class="col-md-4">
+        <div class="card h-100">
+          <div class="card-header bg-primary text-white">Single Server Operations</div>
+          <div class="card-body d-flex flex-column gap-3">
+            <div>
+              <button class="btn btn-outline-primary w-100" onclick="startCollect()">
+                Collect Share Info
+              </button>
+              <div class="form-text mt-1">
+                Scans all Zimbra accounts and builds a share manifest (shares.json).
+                This may take several minutes on large deployments.
+              </div>
+            </div>
+            <hr class="my-1" />
+            <div>
+              <button class="btn btn-primary w-100" onclick="showCleanupConfirm()">
+                Apply Current Manifest State
+              </button>
+              <div class="form-text mt-1">
+                Creates grants and mountpoints for all "Keep" records, then revokes
+                grants and deletes mountpoints for all "Remove" records. Safe to run
+                multiple times — already-existing shares are silently updated.
+              </div>
+            </div>
+            <hr class="my-1" />
+            <div>
+              <button class="btn btn-dark w-100" onclick="showDeleteAllConfirm()">
+                &#9888; Delete All Shares
+              </button>
+              <div class="form-text mt-1">
+                Removes <strong>every</strong> share grant and mountpoint on this server.
+                Manifests are unaffected — shares can be recreated via Apply Migration.
+                <strong>Irreversible.</strong>
+              </div>
+            </div>
+            <div id="singleServerStatus" class="text-muted small mt-1"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Column 3: Migration Operations -->
+      <div class="col-md-4">
+        <div class="card h-100">
+          <div class="card-header bg-success text-white">Migration Operations</div>
+          <div class="card-body d-flex flex-column gap-3">
+            <div>
+              <p class="fw-semibold mb-1">On <em>source</em> server:</p>
+              <button class="btn btn-outline-secondary w-100" onclick="exportManifest()">
+                Export shares.json
+              </button>
+              <div class="form-text mt-1">
+                Downloads the current manifest for transfer to the destination server.
+              </div>
+            </div>
+            <hr class="my-1" />
+            <div>
+              <p class="fw-semibold mb-1">On <em>this (destination)</em> server:</p>
+              <div class="mb-2">
+                <label class="form-label mb-1 small">Load Imported Manifest:</label>
+                <div class="input-group input-group-sm">
+                  <input type="file" class="form-control" id="importFileInput" accept=".json" />
+                  <button class="btn btn-outline-secondary" onclick="importManifest()">Load</button>
+                </div>
+                <div class="form-text mt-1">
+                  Loads a manifest exported from the source server. Once loaded, review
+                  records in the Audit and Orphaned tabs, then use
+                  <em>Apply Current Manifest State</em> to execute.
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div><!-- /row -->
+
+    <!-- Job Progress -->
+    <div class="mt-4" id="jobProgressContainer">
+      <div class="d-flex align-items-center gap-3 mb-1">
+        <div class="flex-grow-1">
+          <div class="progress" style="height:22px;">
+            <div
+              id="jobProgressBar"
+              class="progress-bar progress-bar-striped progress-bar-animated"
+              role="progressbar"
+              style="width: 5%;"
+            >5%</div>
+          </div>
+        </div>
+      </div>
+      <div id="jobStatusMessage" class="text-muted small">Starting...</div>
+    </div>
+
+    <!-- Zimbra Service Status -->
+    <div class="mt-4">
+      <div class="d-flex align-items-center gap-2 mb-2">
+        <button
+          class="btn btn-sm btn-outline-secondary"
+          type="button"
+          data-bs-toggle="collapse"
+          data-bs-target="#statusCollapse"
+          aria-expanded="false"
+        >
+          Zimbra Service Status &#9660;
+        </button>
+      </div>
+      <div class="collapse" id="statusCollapse">
+        <pre id="statusPre">Loading...</pre>
+      </div>
+    </div>
+
+    <!-- Recent Operations + Last Apply Results -->
+    <div class="row mt-3 g-3">
+
+      <!-- Audit log -->
+      <div class="col-md-6">
+        <div class="card h-100">
+          <div class="card-header d-flex justify-content-between align-items-center py-2">
+            <span class="fw-semibold">Recent Operations</span>
+            <button class="btn btn-sm btn-outline-secondary" onclick="loadAuditLog()">Refresh</button>
+          </div>
+          <div class="card-body p-0">
+            <table class="table table-sm table-hover mb-0" id="auditLogTable">
+              <thead class="table-light">
+                <tr>
+                  <th>Time</th><th>Action</th><th>Status</th><th>Detail</th>
+                </tr>
+              </thead>
+              <tbody id="auditLogBody">
+                <tr><td colspan="4" class="text-muted text-center py-2">Loading...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Last apply results -->
+      <div class="col-md-6">
+        <div class="card h-100">
+          <div class="card-header d-flex justify-content-between align-items-center py-2">
+            <span class="fw-semibold">Last Apply Results</span>
+            <button class="btn btn-sm btn-outline-secondary" onclick="loadApplyResults()">Refresh</button>
+          </div>
+          <div class="card-body" id="applyResultsBody">
+            <span class="text-muted">No results yet.</span>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /row -->
+
+    <!-- Version History -->
+    <div class="row mt-3 g-3">
+      <div class="col-12">
+        <div class="card">
+          <div class="card-header d-flex justify-content-between align-items-center py-2">
+            <span class="fw-semibold">Manifest Version History</span>
+            <button class="btn btn-sm btn-outline-secondary" onclick="loadVersionHistory()">Refresh</button>
+          </div>
+          <div class="card-body p-0">
+            <table class="table table-sm table-hover mb-0" id="versionHistoryTable">
+              <thead class="table-light">
+                <tr>
+                  <th>File</th><th>Version</th><th>Last Action</th>
+                  <th>Timestamp</th><th>Records</th><th>Download</th>
+                </tr>
+              </thead>
+              <tbody id="versionHistoryBody">
+                <tr><td colspan="6" class="text-muted text-center py-2">Loading...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div><!-- /row -->
+
+  </div><!-- /pane-admin -->
+
+  <!-- ===== AUDIT TAB ===== -->
+  <div id="pane-audit" style="display:none;">
+
+    <!-- Header row -->
+    <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+      <div>
+        <h5 class="mb-0 d-inline">Share Audit</h5>
+        <span class="text-muted small ms-2" id="auditSummary">No manifest loaded</span>
+      </div>
+      <div class="d-flex gap-2 align-items-center">
+        <input
+          type="text"
+          class="form-control form-control-sm"
+          id="filterInput"
+          placeholder="Filter accounts / folders..."
+          style="width:250px;"
+          oninput="filterAudit(this.value)"
+        />
+        <button class="btn btn-sm btn-outline-primary" onclick="loadAudit()">Refresh</button>
+      </div>
+    </div>
+
+    <!-- Legend -->
+    <div class="mb-3 small text-muted">
+      <span class="legend-dot legend-orphan"></span> Orphaned account &nbsp;&nbsp;
+      <span class="legend-dot legend-remove"></span> Flagged for removal
+    </div>
+
+    <!-- Audit content -->
+    <div id="auditContainer">
+      <div class="text-muted">Load the manifest to view shares.</div>
+    </div>
+
+    <!-- Pagination -->
+    <div id="auditPagination" class="d-flex justify-content-center mt-3" style="display:none!important;"></div>
+
+  </div><!-- /pane-audit -->
+
+  <!-- ===== ORPHANED TAB ===== -->
+  <div id="pane-orphaned" style="display:none;">
+
+    <!-- Header row -->
+    <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+      <div>
+        <h5 class="mb-0 d-inline">Orphaned Shares</h5>
+        <span class="text-muted small ms-2" id="orphanedSummary">No manifest loaded</span>
+      </div>
+      <div class="d-flex gap-2 align-items-center">
+        <button class="btn btn-sm btn-warning" onclick="showRemoveAllOrphanedConfirm()">&#9888; Remove All Orphaned</button>
+        <button class="btn btn-sm btn-outline-primary" onclick="loadOrphanedAudit()">Refresh</button>
+      </div>
+    </div>
+
+    <!-- Legend -->
+    <div class="mb-3 small text-muted">
+      <strong>Orphaned:</strong> A grant without a matching mount, or a mount without a matching grant.
+      These records are excluded from the Audit Shares tab.
+    </div>
+
+    <!-- Orphaned content -->
+    <div id="orphanedContainer">
+      <div class="text-muted">Load the manifest to view orphaned shares.</div>
+    </div>
+
+    <!-- Pagination -->
+    <div id="orphanedPagination" class="d-flex justify-content-center mt-3" style="display:none!important;"></div>
+
+  </div><!-- /pane-orphaned -->
+
+</div><!-- /container-fluid -->
+
+<!-- ===== TOAST ===== -->
+<div id="toastContainer">
+  <div id="liveToast" class="toast align-items-center border-0" role="alert" aria-live="assertive">
+    <div class="d-flex">
+      <div class="toast-body" id="toastBody">Message here</div>
+      <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== MODAL: Collect Warn ===== -->
+<div class="modal fade" id="modal-collect-warn" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header bg-warning">
+        <h5 class="modal-title">Manifest Exists</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p>
+          A manifest already exists with
+          <strong><span id="existingRecordCount">?</span> records</strong>.
+        </p>
+        <p>Do you want to overwrite it with a fresh collection?</p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">No, Cancel</button>
+        <button
+          type="button"
+          class="btn btn-warning"
+          data-bs-dismiss="modal"
+          onclick="doCollect(true)"
+        >Yes, Overwrite</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== MODAL: Remove All Orphaned Confirm ===== -->
+<div class="modal fade" id="modal-remove-all-orphaned" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content border-warning">
+      <div class="modal-header bg-warning">
+        <h5 class="modal-title">Remove All Orphaned Shares</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p>Do you want to remove all orphaned grant/mounts?</p>
+        <p class="text-muted small mb-0">
+          All records with a grant but no matching mount, or a mount but no matching grant,
+          will be flagged for removal in the manifest. This does not immediately modify Zimbra —
+          use <strong>Apply Cleanup</strong> to execute the removals.
+        </p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-warning" data-bs-dismiss="modal"
+                onclick="doRemoveAllOrphaned()">Confirm</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== MODAL: Delete All Shares Confirm ===== -->
+<div class="modal fade" id="modal-delete-all-confirm" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content border-danger">
+      <div class="modal-header bg-dark text-white">
+        <h5 class="modal-title">&#9888; Delete ALL Shares — Final Confirmation</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="alert alert-danger mb-3">
+          <strong>DANGER — This action is irreversible.</strong><br>
+          Every share grant and mountpoint on this server will be permanently removed.
+        </div>
+        <ul class="small mb-3">
+          <li>All outgoing share grants across every account will be revoked.</li>
+          <li>All mounted shared folders in every mailbox will be deleted.</li>
+          <li>Existing manifests are <strong>not affected</strong>.</li>
+          <li>Shares can be recreated later using <strong>Apply Migration</strong>.</li>
+        </ul>
+        <p class="fw-semibold mb-1">Type <code>Delete All Shares</code> exactly to unlock the button:</p>
+        <input type="text" class="form-control" id="deleteAllInput"
+               placeholder="Delete All Shares"
+               oninput="onDeleteAllInput()" autocomplete="off" />
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-dark" id="deleteAllConfirmBtn"
+                disabled data-bs-dismiss="modal"
+                onclick="doDeleteAllShares()">
+          Delete All Shares
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== MODAL: Apply Manifest State Confirm ===== -->
+<div class="modal fade" id="modal-cleanup-confirm" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header bg-primary text-white">
+        <h5 class="modal-title">Apply Current Manifest State</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p>
+          <strong>Phase 1 — Create:</strong>
+          <span id="cleanupKeepCount">0</span> records flagged "Keep" will have their
+          grants and mountpoints created or updated on this server.
+          Accounts not present on this server are skipped automatically.
+        </p>
+        <p>
+          <strong>Phase 2 — Remove:</strong>
+          <span id="cleanupRemoveCount">0</span> records flagged "Remove" will have their
+          grants revoked and mountpoints deleted.
+        </p>
+        <div class="alert alert-warning py-2 mb-0">
+          Removal of grants and mountpoints is <strong>irreversible</strong>.
+          Creation is safe to repeat — already-existing shares are silently updated.
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button
+          type="button"
+          class="btn btn-primary"
+          data-bs-dismiss="modal"
+          onclick="doCleanup()"
+        >Apply</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<script
+  src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"
+  integrity="sha384-C6RzsynM9kWDrMNeT87bh95OGNyZPhcTNXj1NW7RuBCsyN/o0jlpcV8Qyq46cDfL"
+  crossorigin="anonymous"
+></script>
+
+<script>
+// ============================================================
+// Global state
+// ============================================================
+let auditData = [];
+let pollTimer = null;
+let childMap = {};            // parentId -> [childId, ...]
+let granteeToggleState = {};  // pairKey -> true (expanded) | false (collapsed); undefined = expanded
+const PAGE_SIZE = 10;
+let currentPage = 0;
+let orphanedPage = 0;
+let orphanedChildMap = {};
+let orphanedToggleState = {};
+
+// ============================================================
+// Tab management
+// ============================================================
+function showTab(tab) {
+  document.getElementById('pane-admin').style.display    = (tab === 'admin')    ? '' : 'none';
+  document.getElementById('pane-audit').style.display    = (tab === 'audit')    ? '' : 'none';
+  document.getElementById('pane-orphaned').style.display = (tab === 'orphaned') ? '' : 'none';
+
+  document.querySelectorAll('#mainTabs .nav-link').forEach(el => el.classList.remove('active'));
+  const tabLinks = document.querySelectorAll('#mainTabs .nav-link');
+  if (tab === 'admin')    tabLinks[0].classList.add('active');
+  if (tab === 'audit')    { tabLinks[1].classList.add('active'); loadAudit(); }
+  if (tab === 'orphaned') { tabLinks[2].classList.add('active'); loadOrphanedAudit(); }
+}
+
+// ============================================================
+// Server info
+// ============================================================
+async function loadServerInfo() {
+  try {
+    const res = await fetch('/api/info');
+    const data = await res.json();
+
+    document.getElementById('navHostname').textContent = data.hostname || '—';
+    document.getElementById('infoHostname').textContent = data.hostname || '—';
+    document.getElementById('infoOS').textContent = data.os || '—';
+    document.getElementById('infoVersion').textContent = data.zimbra_version || '—';
+    document.getElementById('statusPre').textContent = data.zimbra_status || '(no data)';
+
+    // Manifest status
+    const m = data.manifest || {};
+    let manifestHtml = '—';
+    if (m.exists) {
+      const verBadge = m.version != null
+        ? `<span class="badge bg-primary me-1">v${m.version}</span>`
+        : '';
+      const actionBadge = m.last_action
+        ? `<span class="badge bg-secondary me-1">${m.last_action.replace(/_/g,' ')}</span>`
+        : '';
+      const fromText = m.collected_from
+        ? `<span class="text-muted small d-block">from ${escHtml(m.collected_from)}</span>`
+        : '';
+      manifestHtml =
+        verBadge + actionBadge +
+        `<span class="me-1">${m.record_count} records</span>` +
+        `<span class="badge bg-success ms-1">Keep ${m.keep_count}</span>` +
+        `<span class="badge bg-danger ms-1">Remove ${m.remove_count}</span>` +
+        (m.orphan_count > 0 ? `<span class="badge bg-warning text-dark ms-1">Orphaned ${m.orphan_count}</span>` : '') +
+        fromText;
+    } else {
+      manifestHtml = '<span class="text-muted">No manifest</span>';
+    }
+    document.getElementById('infoManifest').innerHTML = manifestHtml;
+  } catch (e) {
+    console.error('loadServerInfo error:', e);
+  }
+}
+
+// ============================================================
+// Job polling
+// ============================================================
+function resetProgressBar() {
+  const container = document.getElementById('jobProgressContainer');
+  const bar = document.getElementById('jobProgressBar');
+  container.style.display = '';
+  bar.style.width = '5%';
+  bar.textContent = '5%';
+  bar.className = 'progress-bar progress-bar-striped progress-bar-animated';
+  document.getElementById('jobStatusMessage').textContent = 'Starting...';
+}
+
+function startJobPoll(jobId, statusElemId) {
+  resetProgressBar();
+  if (pollTimer) clearInterval(pollTimer);
+
+  pollTimer = setInterval(async () => {
+    try {
+      const res = await fetch(`/api/job/${jobId}`);
+      if (res.status === 404) {
+        // Server restarted — job no longer exists in memory; stop polling silently
+        clearInterval(pollTimer);
+        pollTimer = null;
+        return;
+      }
+      if (!res.ok) return;
+      const job = await res.json();
+
+      const bar = document.getElementById('jobProgressBar');
+      const pct = Math.max(5, Math.min(100, job.progress || 0));
+      bar.style.width = pct + '%';
+      bar.textContent = pct + '%';
+      document.getElementById('jobStatusMessage').textContent = job.message || '';
+
+      if (statusElemId) {
+        const el = document.getElementById(statusElemId);
+        if (el) el.textContent = job.message || '';
+      }
+
+      if (job.status === 'done') {
+        clearInterval(pollTimer);
+        bar.className = 'progress-bar bg-success';
+        showToast(job.message || 'Job complete.', 'success');
+        loadServerInfo();
+        loadAuditLog();
+        loadApplyResults();
+        loadVersionHistory();
+      } else if (job.status === 'error') {
+        clearInterval(pollTimer);
+        bar.className = 'progress-bar bg-danger';
+        showToast(job.error || 'Job failed.', 'danger');
+        loadAuditLog();
+      }
+    } catch (e) {
+      console.error('Poll error:', e);
+    }
+  }, 1500);
+}
+
+// ============================================================
+// Collect
+// ============================================================
+async function startCollect() {
+  try {
+    const res = await fetch('/api/collect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ force: false }),
+    });
+
+    if (res.status === 409) {
+      const data = await res.json();
+      document.getElementById('existingRecordCount').textContent = data.record_count || 0;
+      const modal = new bootstrap.Modal(document.getElementById('modal-collect-warn'));
+      modal.show();
+      return;
+    }
+
+    const data = await res.json();
+    startJobPoll(data.job_id, 'singleServerStatus');
+  } catch (e) {
+    showToast('Failed to start collection: ' + e, 'danger');
+  }
+}
+
+async function doCollect(force) {
+  try {
+    // Delete existing manifest first
+    await fetch('/api/manifest/delete', { method: 'POST' });
+
+    const res = await fetch('/api/collect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ force: true }),
+    });
+    const data = await res.json();
+    startJobPoll(data.job_id, 'singleServerStatus');
+  } catch (e) {
+    showToast('Failed to start collection: ' + e, 'danger');
+  }
+}
+
+// ============================================================
+// Cleanup
+// ============================================================
+async function showCleanupConfirm() {
+  const res = await fetch('/api/manifest');
+  if (!res.ok) { showToast('Could not load manifest.', 'warning'); return; }
+  const data = await res.json();
+  if (!data.exists || !data.records || data.records.length === 0) {
+    showToast('No manifest loaded. Run Collect Share Info first.', 'warning');
+    return;
+  }
+  const keepCount   = data.records.filter(r => r.keep === 1).length;
+  const removeCount = data.records.filter(r => r.keep === 0).length;
+  document.getElementById('cleanupKeepCount').textContent   = keepCount;
+  document.getElementById('cleanupRemoveCount').textContent = removeCount;
+
+  const modal = new bootstrap.Modal(document.getElementById('modal-cleanup-confirm'));
+  modal.show();
+}
+
+async function doCleanup() {
+  try {
+    const res = await fetch('/api/apply/cleanup', { method: 'POST' });
+    const data = await res.json();
+    startJobPoll(data.job_id, 'singleServerStatus');
+  } catch (e) {
+    showToast('Failed to start cleanup: ' + e, 'danger');
+  }
+}
+
+// ============================================================
+// Export / Import
+// ============================================================
+function exportManifest() {
+  window.location.href = '/api/export';
+}
+
+async function importManifest() {
+  const input = document.getElementById('importFileInput');
+  if (!input.files || input.files.length === 0) {
+    showToast('Please select a file to import.', 'warning');
+    return;
+  }
+  const formData = new FormData();
+  formData.append('file', input.files[0]);
+  try {
+    const res = await fetch('/api/import', { method: 'POST', body: formData });
+    const data = await res.json();
+    if (data.success) {
+      showToast(data.message || 'Import successful.', 'success');
+      loadServerInfo();
+    } else {
+      showToast(data.message || 'Import failed.', 'danger');
+    }
+  } catch (e) {
+    showToast('Import error: ' + e, 'danger');
+  }
+}
+
+
+// ============================================================
+// Delete All Shares
+// ============================================================
+function showDeleteAllConfirm() {
+  document.getElementById('deleteAllInput').value = '';
+  document.getElementById('deleteAllConfirmBtn').disabled = true;
+  new bootstrap.Modal(document.getElementById('modal-delete-all-confirm')).show();
+}
+
+function onDeleteAllInput() {
+  const val = document.getElementById('deleteAllInput').value;
+  document.getElementById('deleteAllConfirmBtn').disabled = (val !== 'Delete All Shares');
+}
+
+async function doDeleteAllShares() {
+  try {
+    const res = await fetch('/api/apply/delete-all-shares', { method: 'POST' });
+    const data = await res.json();
+    startJobPoll(data.job_id, 'singleServerStatus');
+  } catch (e) {
+    showToast('Failed to start delete: ' + e, 'danger');
+  }
+}
+
+// ============================================================
+// Audit
+// ============================================================
+function isOrphanedRecord(r) {
+  const hasGrant = r.has_grant !== false;
+  const hasMount = r.has_mount !== false;
+  return (hasGrant && !hasMount) || (!hasGrant && hasMount);
+}
+
+async function loadAudit() {
+  try {
+    const res = await fetch('/api/manifest');
+    const data = await res.json();
+    if (!data.exists || !data.records) {
+      document.getElementById('auditContainer').innerHTML =
+        '<div class="text-muted">No manifest found. Run Collect Share Info first.</div>';
+      document.getElementById('auditSummary').textContent = 'No manifest loaded';
+      _updateTabBadges([]);
+      return;
+    }
+    auditData = data.records;
+    const normalRecords   = auditData.filter(r => !isOrphanedRecord(r));
+    const orphanedRecords = auditData.filter(r =>  isOrphanedRecord(r));
+    const keepCount       = normalRecords.filter(r => r.keep === 1).length;
+    const removeCount     = normalRecords.filter(r => r.keep === 0).length;
+    document.getElementById('auditSummary').textContent =
+      `${normalRecords.length} records — Keep: ${keepCount}, Remove: ${removeCount}`;
+    _updateTabBadges(auditData);
+    renderAudit(normalRecords);
+  } catch (e) {
+    showToast('Failed to load audit data: ' + e, 'danger');
+  }
+}
+
+function _updateTabBadges(records) {
+  const orphanedCount = records.filter(r => isOrphanedRecord(r)).length;
+  const badge = document.getElementById('orphanedBadge');
+  if (orphanedCount > 0) {
+    badge.textContent = orphanedCount;
+    badge.style.display = '';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+function buildInheritedCountMap(records) {
+  // Returns { rootRecordId -> inheritedChildCount } for rows that have hidden subfolder grants.
+  const roots     = records.filter(r => !r.mount_is_inherited);
+  const inherited = records.filter(r =>  r.mount_is_inherited);
+  const countMap  = {};
+  for (const root of roots) {
+    if (!root.source_folder) continue;
+    const prefix = root.source_folder.replace(/\/$/, '') + '/';
+    const n = inherited.filter(i =>
+      i.source_account  === root.source_account &&
+      i.grantee_account === root.grantee_account &&
+      (i.source_folder || '').startsWith(prefix)
+    ).length;
+    if (n > 0) countMap[root.id] = n;
+  }
+  return countMap;
+}
+
+function renderAudit(records) {
+  const container = document.getElementById('auditContainer');
+  childMap = {};
+
+  if (!records || records.length === 0) {
+    container.innerHTML = '<div class="text-muted">No records to display.</div>';
+    document.getElementById('auditPagination').style.cssText = 'display:none!important';
+    return;
+  }
+
+  // Inherited subfolder grants are hidden from the table — shown as a count badge on their
+  // root row. The server cascades Keep/Remove to them automatically.
+  const visibleRecords    = records.filter(r => !r.mount_is_inherited);
+  const inheritedCountMap = buildInheritedCountMap(records);
+
+  // Group visible records by source_account → grantee_account
+  const accountMap = {};
+  for (const r of visibleRecords) {
+    const acct = r.source_account || '(unknown)';
+    if (!accountMap[acct]) accountMap[acct] = {};
+    const grantee = r.grantee_account || '(unknown)';
+    if (!accountMap[acct][grantee]) accountMap[acct][grantee] = [];
+    accountMap[acct][grantee].push(r);
+  }
+
+  const sortedAccounts = Object.keys(accountMap).sort();
+  let html = '';
+
+  for (const account of sortedAccounts) {
+    const granteeMap = accountMap[account];
+    const sortedGrantees = Object.keys(granteeMap).sort();
+    let totalRecords = 0;
+    for (const g of sortedGrantees) totalRecords += granteeMap[g].length;
+
+    // start hidden; applyPage() will reveal the current page
+    html += `<div class="mb-3 group-block" data-group-account="${escAttr(account)}" style="display:none">`;
+    html += `<div class="group-header">${escHtml(account)} <span class="fw-normal text-muted">(${totalRecords} share${totalRecords !== 1 ? 's' : ''})</span></div>`;
+    html += `<div class="table-responsive"><table class="table table-bordered table-hover audit-table">`;
+    html += `<thead><tr>
+      <th style="width:110px">Action</th>
+      <th>Source Folder / Perms</th>
+      <th>Destination Account</th>
+      <th>Mount Path</th>
+      <th>Status</th>
+    </tr></thead><tbody>`;
+
+    for (const grantee of sortedGrantees) {
+      const granteeRecords = granteeMap[grantee];
+      const pairKey = `${account}|${grantee}`;
+      const isCollapsed = granteeToggleState[pairKey] !== true;
+      const shareCount = granteeRecords.length;
+
+      // Detect root "/" share — nest siblings as collapsible children
+      const rootRecord = granteeRecords.find(r => r.source_folder === '/');
+      const nonRootRecords = granteeRecords
+        .filter(r => r.source_folder !== '/')
+        .sort((a, b) => (a.source_folder || '').localeCompare(b.source_folder || ''));
+
+      // Sub-group header per grantee — collapsible, with share count and bulk action buttons
+      html += `<tr class="subgroup-row" data-pair-key="${escAttr(pairKey)}">
+        <td colspan="5">
+          <button class="toggle-btn me-1" onclick="toggleGranteeGroup('${escAttr(pairKey)}')"
+                  data-expanded="${isCollapsed ? 'false' : 'true'}"
+                  title="Collapse/expand this grantee's shares">${isCollapsed ? '&#9654;' : '&#9660;'} </button>
+          ${escHtml(grantee)}
+          <span class="fw-normal text-muted ms-1">(${shareCount} share${shareCount !== 1 ? 's' : ''})</span>
+          <span class="ms-3">
+            <button class="btn btn-danger btn-sm py-0 px-1" onclick="bulkFlagGrantee('${escAttr(pairKey)}', 0)">Remove All</button>
+            <button class="btn btn-success btn-sm py-0 px-1" onclick="bulkFlagGrantee('${escAttr(pairKey)}', 1)">Keep All</button>
+          </span>
+        </td></tr>`;
+
+      if (rootRecord) {
+        const childIds = nonRootRecords.map(r => r.id);
+        if (childIds.length) childMap[rootRecord.id] = childIds;
+        html += buildAuditRow(rootRecord, false, childIds.length > 0, pairKey, isCollapsed, inheritedCountMap[rootRecord.id] || 0);
+        for (const r of nonRootRecords) html += buildAuditRow(r, true, false, pairKey, isCollapsed, inheritedCountMap[r.id] || 0);
+      } else {
+        const sorted = [...granteeRecords].sort((a, b) =>
+          (a.source_folder || '').localeCompare(b.source_folder || '')
+        );
+        for (const r of sorted) html += buildAuditRow(r, false, false, pairKey, isCollapsed, inheritedCountMap[r.id] || 0);
+      }
+    }
+
+    html += `</tbody></table></div></div>`;
+  }
+
+  container.innerHTML = html;
+
+  // Paginate and re-apply any active filter
+  currentPage = 0;
+  applyPage();
+  const filterVal = document.getElementById('filterInput').value;
+  if (filterVal) filterAudit(filterVal);
+}
+
+function buildAuditRow(r, isChild, hasChildren, pairKey = '', isGranteeCollapsed = false, inheritedCount = 0) {
+  const isRemove = r.keep === 0;
+  const isOrphan = (r.source_orphaned || r.grantee_orphaned) && !isRemove;
+  const classes = [
+    isRemove ? 'row-remove' : (isOrphan ? 'row-orphan' : ''),
+    isChild ? 'child-row' : '',
+  ].filter(Boolean).join(' ');
+  // If the grantee group is collapsed and this is not a child-row, hide inline.
+  // (child-row display is controlled by CSS + toggleChildren; when grantee collapses
+  //  all rows get display:none; on expand, child-rows are left to CSS.)
+  const hiddenStyle = (!isChild && isGranteeCollapsed) ? ' style="display:none"' : '';
+
+  const searchStr = [
+    r.source_account, r.source_folder, r.grantee_account, r.grantee_mountpoint || ''
+  ].join(' ').toLowerCase();
+
+  const actionBtn = isRemove
+    ? `<button class="btn btn-success btn-sm" onclick="toggleFlag('${r.id}', 1)">Keep</button>`
+    : `<button class="btn btn-danger btn-sm" onclick="toggleFlag('${r.id}', 0)">Remove</button>`;
+
+  const toggleBtn = hasChildren
+    ? `<button class="toggle-btn" onclick="toggleChildren('${r.id}')" data-expanded="false" title="Show/hide subfolders">&#9654; </button>`
+    : '';
+
+  const permsFormatted = formatPerms(r.permissions || '');
+  const inheritedBadge = inheritedCount > 0
+    ? ` <span class="badge bg-info text-dark" title="${inheritedCount} subfolder grant${inheritedCount !== 1 ? 's are' : ' is'} hidden — covered by this share's mountpoint">+${inheritedCount} subfolder grant${inheritedCount !== 1 ? 's' : ''}</span>`
+    : '';
+  const folderCell = `${toggleBtn}${escHtml(r.source_folder || '—')} <span class="badge bg-secondary">${escHtml(permsFormatted)}</span>${inheritedBadge}`;
+
+  const granteeCell = r.grantee_orphaned
+    ? `${escHtml(r.grantee_account)} <span title="Orphaned account">&#9888;</span>`
+    : escHtml(r.grantee_account || '—');
+
+  const mountCell = r.grantee_mountpoint
+    ? escHtml(r.grantee_mountpoint)
+    : '<span class="text-muted">Not mounted</span>';
+
+  let statusBadges = '';
+  if (r.source_orphaned) statusBadges += '<span class="badge bg-warning text-dark me-1">Src Orphaned</span>';
+  if (r.grantee_orphaned) statusBadges += '<span class="badge bg-warning text-dark me-1">Dst Orphaned</span>';
+  if (!r.has_grant) statusBadges += '<span class="badge bg-secondary me-1">No Grant</span>';
+  if (!r.has_mount) statusBadges += '<span class="badge bg-secondary me-1">Not Mounted</span>';
+  if (!r.source_orphaned && !r.grantee_orphaned && r.has_grant) {
+    statusBadges += '<span class="badge bg-success me-1">OK</span>';
+  }
+
+  return `<tr class="${classes}" data-record-id="${r.id}" data-pair-key="${escAttr(pairKey)}" data-search="${escAttr(searchStr)}"${hiddenStyle}>
+    <td>${actionBtn}</td>
+    <td>${folderCell}</td>
+    <td>${granteeCell}</td>
+    <td>${mountCell}</td>
+    <td>${statusBadges}</td>
+  </tr>`;
+}
+
+function toggleChildren(parentId) {
+  const parentRow = document.querySelector(`tr[data-record-id="${parentId}"]`);
+  if (!parentRow) return;
+  const btn = parentRow.querySelector('.toggle-btn');
+  if (!btn) return;
+  const expanded = btn.dataset.expanded === 'true';
+  for (const childId of (childMap[parentId] || [])) {
+    const childRow = document.querySelector(`tr[data-record-id="${childId}"]`);
+    if (childRow) childRow.style.display = expanded ? 'none' : '';
+  }
+  btn.dataset.expanded = expanded ? 'false' : 'true';
+  btn.innerHTML = expanded ? '&#9654; ' : '&#9660; ';
+}
+
+function toggleGranteeGroup(pairKey) {
+  // Toggle collapsed/expanded; undefined = collapsed (default)
+  const currentlyExpanded = granteeToggleState[pairKey] === true;
+  const willExpand = !currentlyExpanded;
+  granteeToggleState[pairKey] = willExpand;
+
+  // Update subgroup header toggle button
+  const headerRow = document.querySelector(`.subgroup-row[data-pair-key="${pairKey}"]`);
+  if (headerRow) {
+    const btn = headerRow.querySelector('.toggle-btn');
+    if (btn) {
+      btn.dataset.expanded = willExpand ? 'true' : 'false';
+      btn.innerHTML = willExpand ? '&#9660; ' : '&#9654; ';
+    }
+  }
+
+  // Show/hide all data rows for this grantee
+  document.querySelectorAll(`tr[data-pair-key="${pairKey}"][data-record-id]`).forEach(row => {
+    if (!willExpand) {
+      row.style.display = 'none';
+    } else {
+      // Restore non-child rows; child-row display is governed by CSS + toggleChildren
+      if (!row.classList.contains('child-row')) {
+        row.style.display = '';
+      }
+    }
+  });
+}
+
+async function bulkFlagGrantee(pairKey, newKeep) {
+  const rows = document.querySelectorAll(`tr[data-pair-key="${pairKey}"][data-record-id]`);
+  const ids = Array.from(rows).map(r => r.dataset.recordId);
+  if (!ids.length) return;
+
+  await Promise.all(ids.map(async id => {
+    try {
+      const res = await fetch('/api/shares/flag', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, keep: newKeep }),
+      });
+      if (res.ok) updateRecordUI(id, newKeep);
+    } catch (e) { console.error('Bulk flag failed for', id, e); }
+  }));
+
+  const label = newKeep === 0 ? 'removal' : 'keep';
+  showToast(`${ids.length} share(s) flagged for ${label}.`, newKeep === 0 ? 'warning' : 'success');
+  loadServerInfo();
+}
+
+function applyPage() {
+  const groups = Array.from(document.querySelectorAll('.group-block'));
+  const totalPages = Math.ceil(groups.length / PAGE_SIZE);
+  const start = currentPage * PAGE_SIZE;
+  const end = start + PAGE_SIZE;
+  groups.forEach((g, idx) => {
+    g.style.display = (idx >= start && idx < end) ? '' : 'none';
+  });
+  renderPagination(totalPages);
+}
+
+function setPage(page) {
+  const groups = document.querySelectorAll('.group-block');
+  const totalPages = Math.ceil(groups.length / PAGE_SIZE);
+  if (page < 0 || page >= totalPages) return;
+  currentPage = page;
+  applyPage();
+  window.scrollTo(0, 0);
+}
+
+function renderPagination(totalPages) {
+  const el = document.getElementById('auditPagination');
+  if (totalPages <= 1) {
+    el.style.cssText = 'display:none!important';
+    return;
+  }
+  el.style.cssText = '';
+  let html = '<nav><ul class="pagination pagination-sm mb-2">';
+  html += `<li class="page-item${currentPage === 0 ? ' disabled' : ''}">
+    <a class="page-link" href="#" onclick="setPage(${currentPage - 1}); return false;">&lsaquo; Prev</a></li>`;
+  const maxShow = Math.min(totalPages, 20);
+  for (let i = 0; i < maxShow; i++) {
+    html += `<li class="page-item${i === currentPage ? ' active' : ''}">
+      <a class="page-link" href="#" onclick="setPage(${i}); return false;">${i + 1}</a></li>`;
+  }
+  if (totalPages > maxShow) {
+    html += `<li class="page-item disabled"><span class="page-link">…${totalPages - maxShow} more</span></li>`;
+  }
+  html += `<li class="page-item${currentPage === totalPages - 1 ? ' disabled' : ''}">
+    <a class="page-link" href="#" onclick="setPage(${currentPage + 1}); return false;">Next &rsaquo;</a></li>`;
+  html += '</ul></nav>';
+  el.innerHTML = html;
+}
+
+function formatPerms(rights) {
+  if (!rights) return '';
+  const map = { r: 'Read', w: 'Write', i: 'Insert', d: 'Delete', a: 'Admin', x: 'Workflow', s: 'Subfolder', c: 'Create' };
+  return rights.split('').map(c => map[c] || c).join(', ');
+}
+
+async function toggleFlag(recordId, newKeep) {
+  try {
+    const res = await fetch('/api/shares/flag', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: recordId, keep: newKeep }),
+    });
+    if (!res.ok) { showToast('Failed to update flag.', 'danger'); return; }
+    updateRecordUI(recordId, newKeep);
+
+    // Cascade Remove to all children of a root "/" share
+    if (newKeep === 0 && childMap[recordId] && childMap[recordId].length) {
+      // Expand children so the user can see the cascade visually
+      const parentRow = document.querySelector(`tr[data-record-id="${recordId}"]`);
+      if (parentRow) {
+        const btn = parentRow.querySelector('.toggle-btn');
+        if (btn && btn.dataset.expanded !== 'true') toggleChildren(recordId);
+      }
+      const childIds = childMap[recordId];
+      await Promise.all(childIds.map(async childId => {
+        try {
+          await fetch('/api/shares/flag', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: childId, keep: 0 }),
+          });
+          updateRecordUI(childId, 0);
+        } catch (e) { console.error('Cascade flag failed for', childId, e); }
+      }));
+      showToast(`Root share and ${childIds.length} subfolder(s) flagged for removal.`, 'warning');
+    }
+
+    loadServerInfo();
+  } catch (e) {
+    showToast('Error: ' + e, 'danger');
+  }
+}
+
+function updateRecordUI(recordId, newKeep) {
+  const record = auditData.find(r => r.id === recordId);
+  if (record) record.keep = newKeep;
+  const row = document.querySelector(`tr[data-record-id="${recordId}"]`);
+  if (!row) return;
+
+  const isRemove = newKeep === 0;
+  const isOrphan = record && (record.source_orphaned || record.grantee_orphaned) && !isRemove;
+  const isChild = row.classList.contains('child-row');
+  row.className = [
+    isRemove ? 'row-remove' : (isOrphan ? 'row-orphan' : ''),
+    isChild ? 'child-row' : '',
+  ].filter(Boolean).join(' ');
+
+  const actionBtn = row.querySelector('td:first-child > button');
+  if (actionBtn) {
+    if (isRemove) {
+      actionBtn.textContent = 'Keep';
+      actionBtn.className = 'btn btn-success btn-sm';
+      actionBtn.setAttribute('onclick', `toggleFlag('${recordId}', 1)`);
+    } else {
+      actionBtn.textContent = 'Remove';
+      actionBtn.className = 'btn btn-danger btn-sm';
+      actionBtn.setAttribute('onclick', `toggleFlag('${recordId}', 0)`);
+    }
+  }
+}
+
+function filterAudit(term) {
+  const lower = term.toLowerCase().trim();
+
+  if (!lower) {
+    // Clear filter — restore rows respecting grantee collapse state, then resume pagination
+    document.querySelectorAll('.group-block tr[data-search]').forEach(row => {
+      const pairKey = row.dataset.pairKey || '';
+      if (pairKey && granteeToggleState[pairKey] === false) {
+        row.style.display = 'none';
+      } else if (!row.classList.contains('child-row')) {
+        row.style.display = '';
+      }
+      // child-row: leave as-is (CSS + toggleChildren control them)
+    });
+    currentPage = 0;
+    applyPage();
+    return;
+  }
+
+  // Filter active — show all matching groups, suspend pagination
+  document.getElementById('auditPagination').style.cssText = 'display:none!important';
+  const groups = document.querySelectorAll('.group-block');
+  for (const group of groups) {
+    const accountMatch = (group.dataset.groupAccount || '').toLowerCase().includes(lower);
+    const rows = group.querySelectorAll('tr[data-search]');
+    let groupVisible = false;
+    for (const row of rows) {
+      const visible = accountMatch || (row.dataset.search || '').toLowerCase().includes(lower);
+      row.style.display = visible ? '' : 'none';
+      if (visible) groupVisible = true;
+    }
+    group.style.display = groupVisible ? '' : 'none';
+  }
+}
+
+// ============================================================
+// Orphaned Shares tab
+// ============================================================
+async function loadOrphanedAudit() {
+  try {
+    const res = await fetch('/api/manifest');
+    const data = await res.json();
+    if (!data.exists || !data.records) {
+      document.getElementById('orphanedContainer').innerHTML =
+        '<div class="text-muted">No manifest found. Run Collect Share Info first.</div>';
+      document.getElementById('orphanedSummary').textContent = 'No manifest loaded';
+      return;
+    }
+    // auditData holds ALL records — keep it in sync for updateRecordUI lookups
+    auditData = data.records;
+    const orphaned    = auditData.filter(r => isOrphanedRecord(r));
+    const keepCount   = orphaned.filter(r => r.keep === 1).length;
+    const removeCount = orphaned.filter(r => r.keep === 0).length;
+    document.getElementById('orphanedSummary').textContent =
+      `${orphaned.length} orphaned — Keep: ${keepCount}, Remove: ${removeCount}`;
+    _updateTabBadges(auditData);
+    renderOrphanedAudit(orphaned);
+  } catch (e) {
+    showToast('Failed to load orphaned data: ' + e, 'danger');
+  }
+}
+
+function renderOrphanedAudit(records) {
+  const container = document.getElementById('orphanedContainer');
+  orphanedChildMap = {};
+
+  if (!records || records.length === 0) {
+    container.innerHTML = '<div class="text-muted">No orphaned records found.</div>';
+    document.getElementById('orphanedPagination').style.cssText = 'display:none!important';
+    return;
+  }
+
+  // Group by source_account → grantee_account (same structure as audit tab)
+  const accountMap = {};
+  for (const r of records) {
+    const acct    = r.source_account  || '(unknown)';
+    const grantee = r.grantee_account || '(unknown)';
+    if (!accountMap[acct]) accountMap[acct] = {};
+    if (!accountMap[acct][grantee]) accountMap[acct][grantee] = [];
+    accountMap[acct][grantee].push(r);
+  }
+
+  const sortedAccounts = Object.keys(accountMap).sort();
+  let html = '';
+
+  for (const account of sortedAccounts) {
+    const granteeMap = accountMap[account];
+    const sortedGrantees = Object.keys(granteeMap).sort();
+    let totalRecords = 0;
+    for (const g of sortedGrantees) totalRecords += granteeMap[g].length;
+
+    html += `<div class="mb-3 orphaned-block" data-orphan-account="${escAttr(account)}" style="display:none">`;
+    html += `<div class="group-header">${escHtml(account)} <span class="fw-normal text-muted">(${totalRecords} orphaned)</span></div>`;
+    html += `<div class="table-responsive"><table class="table table-bordered table-hover audit-table">`;
+    html += `<thead><tr>
+      <th style="width:110px">Action</th>
+      <th>Source Folder / Perms</th>
+      <th>Destination Account</th>
+      <th>Mount Path</th>
+      <th>Status</th>
+    </tr></thead><tbody>`;
+
+    for (const grantee of sortedGrantees) {
+      const granteeRecords = granteeMap[grantee];
+      // Prefix pairKey so it never collides with audit tab keys
+      const pairKey    = `orphaned|${account}|${grantee}`;
+      const isCollapsed = orphanedToggleState[pairKey] !== true;
+      const shareCount  = granteeRecords.length;
+
+      // Root "/" share nesting — same logic as audit tab
+      const rootRecord    = granteeRecords.find(r => r.source_folder === '/');
+      const nonRootRecords = granteeRecords
+        .filter(r => r.source_folder !== '/')
+        .sort((a, b) => (a.source_folder || '').localeCompare(b.source_folder || ''));
+
+      html += `<tr class="subgroup-row orphaned-subgroup-row" data-pair-key="${escAttr(pairKey)}">
+        <td colspan="5">
+          <button class="toggle-btn me-1" onclick="toggleOrphanedGranteeGroup('${escAttr(pairKey)}')"
+                  data-expanded="${isCollapsed ? 'false' : 'true'}"
+                  title="Collapse/expand this grantee's shares">${isCollapsed ? '&#9654;' : '&#9660;'} </button>
+          ${escHtml(grantee)}
+          <span class="fw-normal text-muted ms-1">(${shareCount} share${shareCount !== 1 ? 's' : ''})</span>
+          <span class="ms-3">
+            <button class="btn btn-danger btn-sm py-0 px-1" onclick="bulkFlagGrantee('${escAttr(pairKey)}', 0)">Remove All</button>
+            <button class="btn btn-success btn-sm py-0 px-1" onclick="bulkFlagGrantee('${escAttr(pairKey)}', 1)">Keep All</button>
+          </span>
+        </td></tr>`;
+
+      if (rootRecord) {
+        const childIds = nonRootRecords.map(r => r.id);
+        if (childIds.length) orphanedChildMap[rootRecord.id] = childIds;
+        html += buildOrphanedRow(rootRecord, false, childIds.length > 0, pairKey, isCollapsed);
+        for (const r of nonRootRecords) html += buildOrphanedRow(r, true, false, pairKey, isCollapsed);
+      } else {
+        const sorted = [...granteeRecords].sort((a, b) =>
+          (a.source_folder || '').localeCompare(b.source_folder || '')
+        );
+        for (const r of sorted) html += buildOrphanedRow(r, false, false, pairKey, isCollapsed);
+      }
+    }
+
+    html += `</tbody></table></div></div>`;
+  }
+
+  container.innerHTML = html;
+  orphanedPage = 0;
+  applyOrphanedPage();
+}
+
+function buildOrphanedRow(r, isChild = false, hasChildren = false, pairKey = '', isGranteeCollapsed = false) {
+  const isRemove = r.keep === 0;
+  const classes  = [
+    isRemove ? 'row-remove' : 'row-orphan',
+    isChild ? 'child-row' : '',
+  ].filter(Boolean).join(' ');
+  const hiddenStyle = (!isChild && isGranteeCollapsed) ? ' style="display:none"' : '';
+
+  const searchStr = [
+    r.source_account, r.source_folder, r.grantee_account, r.grantee_mountpoint || ''
+  ].join(' ').toLowerCase();
+
+  const actionBtn = isRemove
+    ? `<button class="btn btn-success btn-sm" onclick="toggleFlag('${r.id}', 1)">Keep</button>`
+    : `<button class="btn btn-danger btn-sm" onclick="toggleFlag('${r.id}', 0)">Remove</button>`;
+
+  const toggleBtn = hasChildren
+    ? `<button class="toggle-btn" onclick="toggleOrphanedChildren('${r.id}')" data-expanded="false" title="Show/hide subfolders">&#9654; </button>`
+    : '';
+
+  const permsFormatted = formatPerms(r.permissions || '');
+  const folderCell = `${toggleBtn}${escHtml(r.source_folder || '—')} <span class="badge bg-secondary">${escHtml(permsFormatted)}</span>`;
+
+  const mountCell = r.grantee_mountpoint
+    ? escHtml(r.grantee_mountpoint)
+    : '<span class="text-muted">Not mounted</span>';
+
+  let statusBadges = '';
+  if (!r.has_grant)      statusBadges += '<span class="badge bg-warning text-dark me-1">No Grant</span>';
+  if (!r.has_mount)      statusBadges += '<span class="badge bg-warning text-dark me-1">Not Mounted</span>';
+  if (r.source_orphaned) statusBadges += '<span class="badge bg-secondary me-1">Src Orphaned</span>';
+  if (r.grantee_orphaned) statusBadges += '<span class="badge bg-secondary me-1">Dst Orphaned</span>';
+
+  return `<tr class="${classes}" data-record-id="${r.id}" data-pair-key="${escAttr(pairKey)}" data-search="${escAttr(searchStr)}"${hiddenStyle}>
+    <td>${actionBtn}</td>
+    <td>${folderCell}</td>
+    <td>${escHtml(r.grantee_account || '—')}</td>
+    <td>${mountCell}</td>
+    <td>${statusBadges}</td>
+  </tr>`;
+}
+
+function toggleOrphanedChildren(parentId) {
+  const parentRow = document.querySelector(`tr[data-record-id="${parentId}"]`);
+  if (!parentRow) return;
+  const btn = parentRow.querySelector('.toggle-btn');
+  if (!btn) return;
+  const expanded = btn.dataset.expanded === 'true';
+  for (const childId of (orphanedChildMap[parentId] || [])) {
+    const childRow = document.querySelector(`tr[data-record-id="${childId}"]`);
+    if (childRow) childRow.style.display = expanded ? 'none' : '';
+  }
+  btn.dataset.expanded = expanded ? 'false' : 'true';
+  btn.innerHTML = expanded ? '&#9654; ' : '&#9660; ';
+}
+
+function toggleOrphanedGranteeGroup(pairKey) {
+  const currentlyExpanded = orphanedToggleState[pairKey] === true;
+  const willExpand = !currentlyExpanded;
+  orphanedToggleState[pairKey] = willExpand;
+
+  const headerRow = document.querySelector(`.orphaned-subgroup-row[data-pair-key="${pairKey}"]`);
+  if (headerRow) {
+    const btn = headerRow.querySelector('.toggle-btn');
+    if (btn) {
+      btn.dataset.expanded = willExpand ? 'true' : 'false';
+      btn.innerHTML = willExpand ? '&#9660; ' : '&#9654; ';
+    }
+  }
+
+  document.querySelectorAll(`tr[data-pair-key="${pairKey}"][data-record-id]`).forEach(row => {
+    if (!willExpand) {
+      row.style.display = 'none';
+    } else {
+      if (!row.classList.contains('child-row')) row.style.display = '';
+    }
+  });
+}
+
+function applyOrphanedPage() {
+  const groups = Array.from(document.querySelectorAll('.orphaned-block'));
+  const totalPages = Math.ceil(groups.length / PAGE_SIZE);
+  const start = orphanedPage * PAGE_SIZE;
+  const end   = start + PAGE_SIZE;
+  groups.forEach((g, idx) => {
+    g.style.display = (idx >= start && idx < end) ? '' : 'none';
+  });
+  renderOrphanedPagination(totalPages);
+}
+
+function setOrphanedPage(page) {
+  const groups = document.querySelectorAll('.orphaned-block');
+  const totalPages = Math.ceil(groups.length / PAGE_SIZE);
+  if (page < 0 || page >= totalPages) return;
+  orphanedPage = page;
+  applyOrphanedPage();
+  window.scrollTo(0, 0);
+}
+
+function renderOrphanedPagination(totalPages) {
+  const el = document.getElementById('orphanedPagination');
+  if (totalPages <= 1) {
+    el.style.cssText = 'display:none!important';
+    return;
+  }
+  el.style.cssText = '';
+  let html = '<nav><ul class="pagination pagination-sm mb-2">';
+  html += `<li class="page-item${orphanedPage === 0 ? ' disabled' : ''}">
+    <a class="page-link" href="#" onclick="setOrphanedPage(${orphanedPage - 1}); return false;">&lsaquo; Prev</a></li>`;
+  const maxShow = Math.min(totalPages, 20);
+  for (let i = 0; i < maxShow; i++) {
+    html += `<li class="page-item${i === orphanedPage ? ' active' : ''}">
+      <a class="page-link" href="#" onclick="setOrphanedPage(${i}); return false;">${i + 1}</a></li>`;
+  }
+  if (totalPages > maxShow) {
+    html += `<li class="page-item disabled"><span class="page-link">…${totalPages - maxShow} more</span></li>`;
+  }
+  html += `<li class="page-item${orphanedPage === totalPages - 1 ? ' disabled' : ''}">
+    <a class="page-link" href="#" onclick="setOrphanedPage(${orphanedPage + 1}); return false;">Next &rsaquo;</a></li>`;
+  html += '</ul></nav>';
+  el.innerHTML = html;
+}
+
+function showRemoveAllOrphanedConfirm() {
+  new bootstrap.Modal(document.getElementById('modal-remove-all-orphaned')).show();
+}
+
+async function doRemoveAllOrphaned() {
+  try {
+    const res = await fetch('/api/shares/flag-all-orphaned', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast(`${data.flagged} orphaned record(s) flagged for removal.`, 'warning');
+      loadOrphanedAudit();
+      loadServerInfo();
+    } else {
+      showToast(data.error || 'Failed to flag orphaned records.', 'danger');
+    }
+  } catch (e) {
+    showToast('Error: ' + e, 'danger');
+  }
+}
+
+// ============================================================
+// Toast
+// ============================================================
+function showToast(message, type) {
+  const toastEl = document.getElementById('liveToast');
+  const toastBody = document.getElementById('toastBody');
+  toastBody.textContent = message;
+  // Set color class
+  toastEl.className = 'toast align-items-center border-0';
+  const colorMap = {
+    success: 'text-bg-success',
+    danger:  'text-bg-danger',
+    warning: 'text-bg-warning',
+    info:    'text-bg-info',
+  };
+  toastEl.classList.add(colorMap[type] || 'text-bg-secondary');
+  const toast = bootstrap.Toast.getOrCreateInstance(toastEl, { delay: 5000 });
+  toast.show();
+}
+
+// ============================================================
+// Helpers
+// ============================================================
+function escHtml(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function escAttr(str) {
+  if (!str) return '';
+  return String(str).replace(/"/g, '&quot;');
+}
+
+// ============================================================
+// Audit log panel
+// ============================================================
+async function loadAuditLog() {
+  const tbody = document.getElementById('auditLogBody');
+  if (!tbody) return;
+  try {
+    const res = await fetch('/api/audit/log');
+    const data = await res.json();
+    const entries = data.entries || [];
+    if (!entries.length) {
+      tbody.innerHTML = '<tr><td colspan="4" class="text-muted text-center py-2">No operations recorded yet.</td></tr>';
+      return;
+    }
+    const statusClass = { ok: 'success', partial: 'warning', error: 'danger' };
+    tbody.innerHTML = entries.slice(0, 15).map(e => {
+      const ts = new Date(e.timestamp).toLocaleString();
+      const cls = statusClass[e.status] || 'secondary';
+      const action = e.action.replace(/_/g, ' ');
+      const detail = escHtml((e.detail || '').substring(0, 80));
+      return `<tr>
+        <td class="text-nowrap small">${ts}</td>
+        <td class="small">${escHtml(action)}</td>
+        <td><span class="badge bg-${cls}">${escHtml(e.status)}</span></td>
+        <td class="small text-muted">${detail}</td>
+      </tr>`;
+    }).join('');
+  } catch (e) {
+    tbody.innerHTML = '<tr><td colspan="4" class="text-danger small">Error loading log.</td></tr>';
+  }
+}
+
+// ============================================================
+// Apply results panel
+// ============================================================
+async function loadApplyResults() {
+  const body = document.getElementById('applyResultsBody');
+  if (!body) return;
+  try {
+    const res = await fetch('/api/apply/results');
+    const data = await res.json();
+    if (!data.exists && !data.operation) {
+      body.innerHTML = '<span class="text-muted">No results yet.</span>';
+      return;
+    }
+    const ts = data.timestamp ? new Date(data.timestamp).toLocaleString() : '—';
+    const op = (data.operation || '').replace(/_/g, ' ');
+    const skippedCount  = (data.skipped || []).length;
+    const partialCount  = (data.partial_failures || []).length;
+    const errorCount    = (data.errors || []).length;
+
+    let html = `<p class="mb-2"><strong>${escHtml(op)}</strong> &mdash; ${ts}</p>`;
+
+    if (data.operation === 'apply_manifest_state' || data.operation === 'migration') {
+      html += `<ul class="list-unstyled small mb-2">
+        <li>Grants set: <strong>${data.created_grants ?? '—'}</strong></li>
+        <li>Mounts created: <strong>${data.created_mounts ?? '—'}</strong></li>
+        ${(data.existing_mounts > 0) ? `<li>Mounts already existed: <strong>${data.existing_mounts}</strong></li>` : ''}
+        <li>Grants removed: <strong>${data.removed_grants ?? 0}</strong></li>
+        <li>Mounts deleted: <strong>${data.removed_mounts ?? 0}</strong></li>
+        <li>Skipped: <strong>${skippedCount}</strong></li>
+        <li>Partial failures: <strong class="${partialCount ? 'text-warning' : ''}">${partialCount}</strong></li>
+        <li>Errors: <strong class="${errorCount ? 'text-danger' : ''}">${errorCount}</strong></li>
+      </ul>`;
+    } else if (data.operation === 'delete_all_shares') {
+      html += `<ul class="list-unstyled small mb-2">
+        <li>Grants removed: <strong>${data.removed_grants ?? '—'}</strong></li>
+        <li>Mounts deleted: <strong>${data.removed_mounts ?? '—'}</strong></li>
+        <li>Errors: <strong class="${errorCount ? 'text-danger' : ''}">${errorCount}</strong></li>
+      </ul>`;
+    }
+
+    // Skipped details
+    if (skippedCount) {
+      html += `<details class="small"><summary class="text-muted">${skippedCount} skipped — click to expand</summary><ul class="mt-1">` +
+        (data.skipped || []).map(s =>
+          `<li>${escHtml(s.source)}/${escHtml(s.folder)} &rarr; ${escHtml(s.grantee)}: <em>${escHtml(s.reason)}</em></li>`
+        ).join('') + '</ul></details>';
+    }
+
+    // Partial failures
+    if (partialCount) {
+      html += `<details class="small"><summary class="text-warning">${partialCount} partial failures — click to expand</summary><ul class="mt-1">` +
+        (data.partial_failures || []).map(p =>
+          `<li class="text-warning">${escHtml(p.source)}/${escHtml(p.folder)} &rarr; ${escHtml(p.grantee)}: ${escHtml(p.note)}</li>`
+        ).join('') + '</ul></details>';
+    }
+
+    // Errors
+    if (errorCount) {
+      html += `<details class="small"><summary class="text-danger">${errorCount} errors — click to expand</summary><ul class="mt-1">` +
+        (data.errors || []).map(err =>
+          `<li class="text-danger">${escHtml(err.type || '')}: ${escHtml(err.source || '')}/${escHtml(err.folder || '')} &rarr; ${escHtml(err.grantee || '')}: ${escHtml(err.error || '')}</li>`
+        ).join('') + '</ul></details>';
+    }
+
+    body.innerHTML = html;
+  } catch (e) {
+    body.innerHTML = '<span class="text-danger small">Error loading results.</span>';
+  }
+}
+
+// ============================================================
+// Version history panel
+// ============================================================
+async function loadVersionHistory() {
+  const tbody = document.getElementById('versionHistoryBody');
+  if (!tbody) return;
+  try {
+    const res = await fetch('/api/manifest/versions');
+    const data = await res.json();
+    const versions = data.versions || [];
+    if (!versions.length) {
+      tbody.innerHTML = '<tr><td colspan="6" class="text-muted text-center py-2">No manifest files found.</td></tr>';
+      return;
+    }
+    const actionColors = {
+      collect: 'primary',
+      apply_manifest_state: 'success',
+      apply_migration: 'success',      // legacy label
+      apply_cleanup: 'warning',        // legacy label
+      delete_all_shares: 'dark',
+    };
+    tbody.innerHTML = versions.map(v => {
+      const badgeColor = actionColors[v.last_action] || 'secondary';
+      const actionLabel = v.last_action ? v.last_action.replace(/_/g, ' ') : '—';
+      const ts = v.last_updated ? new Date(v.last_updated).toLocaleString() : '—';
+      const currentBadge = v.current
+        ? '<span class="badge bg-info text-dark me-1">current</span>'
+        : '';
+      const downloadUrl = v.current
+        ? '/api/export'
+        : `/api/manifest/download/${encodeURIComponent(v.filename)}`;
+      if (v.error) {
+        return `<tr class="table-warning">
+          <td>${escHtml(v.filename)}</td>
+          <td colspan="4" class="text-danger small">${escHtml(v.error)}</td>
+          <td></td>
+        </tr>`;
+      }
+      return `<tr>
+        <td>${currentBadge}<span class="font-monospace small">${escHtml(v.filename)}</span></td>
+        <td>${v.version != null ? `<span class="badge bg-primary">v${v.version}</span>` : '—'}</td>
+        <td><span class="badge bg-${badgeColor}">${escHtml(actionLabel)}</span></td>
+        <td class="small text-muted">${ts}</td>
+        <td>${v.record_count ?? '—'}</td>
+        <td><a href="${downloadUrl}" class="btn btn-sm btn-outline-secondary py-0">&#8595; Download</a></td>
+      </tr>`;
+    }).join('');
+  } catch (e) {
+    tbody.innerHTML = '<tr><td colspan="6" class="text-danger small">Error loading versions.</td></tr>';
+  }
+}
+
+// ============================================================
+// Init
+// ============================================================
+document.addEventListener('DOMContentLoaded', () => {
+  loadServerInfo();
+  loadAuditLog();
+  loadApplyResults();
+  loadVersionHistory();
+});
+</script>
+</body>
+</html>
