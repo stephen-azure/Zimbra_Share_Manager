@@ -1,5 +1,9 @@
 # Zimbra Share Manager — Specification
 
+> **No Copyright.** This software is released to the public domain and may be freely used, modified, distributed, or incorporated into other works without restriction or attribution.
+>
+> **Disclaimer:** This software is provided "as is", without warranty of any kind, express or implied. No representation is made that it will function correctly, be fit for any particular purpose, or be free of defects. Use at your own risk.
+
 ## Overview
 
 A single-file Flask web application for auditing and managing Zimbra folder share relationships. Runs on **port 8585** as the `zimbra` OS user. Designed for Zimbra 8.8.15 and 10.1 (both fully supported). The UI is a single Bootstrap 5 page served from `templates/index.html`.
