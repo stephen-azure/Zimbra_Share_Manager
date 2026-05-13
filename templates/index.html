@@ -307,6 +307,40 @@
 
     </div><!-- /row -->
 
+    <!-- Errors Log -->
+    <div class="row mt-3 g-3">
+      <div class="col-12">
+        <div class="card">
+          <div class="card-header d-flex justify-content-between align-items-center py-2">
+            <span class="fw-semibold">
+              Errors Log
+              <span id="errorsLogBadge" class="badge bg-danger ms-1" style="display:none"></span>
+            </span>
+            <div class="d-flex gap-2">
+              <button class="btn btn-sm btn-outline-secondary" onclick="loadErrorsLog()">Refresh</button>
+              <button class="btn btn-sm btn-outline-danger" onclick="clearErrorsLog()">Clear</button>
+            </div>
+          </div>
+          <div class="card-body p-0">
+            <table class="table table-sm table-hover mb-0" id="errorsLogTable">
+              <thead class="table-light">
+                <tr>
+                  <th style="width:140px">Time</th>
+                  <th style="width:70px">Level</th>
+                  <th style="width:90px">Job</th>
+                  <th style="width:220px">Context</th>
+                  <th>Detail</th>
+                </tr>
+              </thead>
+              <tbody id="errorsLogBody">
+                <tr><td colspan="5" class="text-muted text-center py-2">Loading...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div><!-- /row -->
+
     <!-- Version History -->
     <div class="row mt-3 g-3">
       <div class="col-12">
@@ -667,6 +701,7 @@ function startJobPoll(jobId, statusElemId) {
         showToast(job.message || 'Job complete.', 'success');
         loadServerInfo();
         loadAuditLog();
+        loadErrorsLog();
         loadApplyResults();
         loadVersionHistory();
       } else if (job.status === 'error') {
@@ -674,6 +709,7 @@ function startJobPoll(jobId, statusElemId) {
         bar.className = 'progress-bar bg-danger';
         showToast(job.error || 'Job failed.', 'danger');
         loadAuditLog();
+        loadErrorsLog();
       }
     } catch (e) {
       console.error('Poll error:', e);
@@ -1569,6 +1605,60 @@ async function loadAuditLog() {
 }
 
 // ============================================================
+// Errors log panel
+// ============================================================
+async function loadErrorsLog() {
+  const tbody = document.getElementById('errorsLogBody');
+  const badge = document.getElementById('errorsLogBadge');
+  if (!tbody) return;
+  try {
+    const res = await fetch('/api/errors/log');
+    const data = await res.json();
+    const entries = data.entries || [];
+
+    if (badge) {
+      if (entries.length > 0) {
+        badge.textContent = entries.length;
+        badge.style.display = '';
+      } else {
+        badge.style.display = 'none';
+      }
+    }
+
+    if (!entries.length) {
+      tbody.innerHTML = '<tr><td colspan="5" class="text-muted text-center py-2">No errors logged.</td></tr>';
+      return;
+    }
+
+    const levelClass = { error: 'danger', warning: 'warning' };
+    tbody.innerHTML = entries.slice(0, 50).map(e => {
+      const ts = new Date(e.timestamp).toLocaleString();
+      const cls = levelClass[e.level] || 'secondary';
+      const job = (e.job || '').replace(/_/g, ' ');
+      return `<tr>
+        <td class="text-nowrap small">${ts}</td>
+        <td><span class="badge bg-${cls} text-${e.level === 'warning' ? 'dark' : 'white'}">${escHtml(e.level)}</span></td>
+        <td class="small">${escHtml(job)}</td>
+        <td class="small text-truncate" style="max-width:220px" title="${escAttr(e.context || '')}">${escHtml(e.context || '—')}</td>
+        <td class="small text-muted">${escHtml(e.detail || '')}</td>
+      </tr>`;
+    }).join('');
+  } catch (e) {
+    tbody.innerHTML = '<tr><td colspan="5" class="text-danger small">Error loading log.</td></tr>';
+  }
+}
+
+async function clearErrorsLog() {
+  if (!confirm('Clear all entries from the errors log?')) return;
+  try {
+    await fetch('/api/errors/clear', { method: 'POST' });
+    loadErrorsLog();
+  } catch (e) {
+    showToast('Failed to clear errors log: ' + e, 'danger');
+  }
+}
+
+// ============================================================
 // Apply results panel
 // ============================================================
 async function loadApplyResults() {
@@ -1696,6 +1786,7 @@ async function loadVersionHistory() {
 document.addEventListener('DOMContentLoaded', () => {
   loadServerInfo();
   loadAuditLog();
+  loadErrorsLog();
   loadApplyResults();
   loadVersionHistory();
 });

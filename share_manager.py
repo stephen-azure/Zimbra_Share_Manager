@@ -56,6 +56,7 @@ SHARES_FILE   = DATA_DIR / 'shares.json'
 ACCOUNTS_FILE = DATA_DIR / 'accounts.json'
 RESULTS_FILE  = DATA_DIR / 'apply_results.json'
 AUDIT_FILE    = LOG_DIR  / 'audit.log'
+ERRORS_FILE   = LOG_DIR  / 'errors.log'
 LOG_FILE      = LOG_DIR  / 'share_manager.log'
 ZIMBRA_BIN    = Path('/opt/zimbra/bin')
 PORT = 8585
@@ -106,6 +107,29 @@ def write_audit(action: str, detail: str, status: str = 'ok'):
                 fh.write(json.dumps(entry) + '\n')
     except Exception as exc:
         log.warning("write_audit failed: %s", exc)
+
+# ---------------------------------------------------------------------------
+# Errors log  (one JSON line per per-account/per-record operational failure)
+# ---------------------------------------------------------------------------
+
+_errors_lock = threading.Lock()
+
+
+def write_error_log(job: str, context: str, detail: str, level: str = 'warning'):
+    """Append a structured entry to errors.log. Never raises."""
+    entry = {
+        'timestamp': datetime.now(timezone.utc).isoformat(),
+        'level': level,
+        'job': job,
+        'context': context,
+        'detail': detail,
+    }
+    try:
+        with _errors_lock:
+            with open(ERRORS_FILE, 'a', encoding='utf-8') as fh:
+                fh.write(json.dumps(entry) + '\n')
+    except Exception as exc:
+        log.warning("write_error_log failed: %s", exc)
 
 # ---------------------------------------------------------------------------
 # Flask app
@@ -535,10 +559,22 @@ def parse_getshareinfo(output: str, owner_account: str, all_accounts: set = None
             if not folder_path or not grantee_raw:
                 continue
 
-            # Skip non-user grants (group, domain, public) — no single email to act on
+            # Group/domain/public grants have no individual grantee to act on directly,
+            # but distribution-list members may have the folder mounted. Track these
+            # grants so their members' mounts are not misidentified as orphaned.
+            # The grantee field holds the DL/domain email — possibly truncated since DLs
+            # are not in the user accounts list and can't be expanded — stored as-is.
             if gt and gt not in ('usr', ''):
-                log.debug("parse_getshareinfo: skipping grant type=%r for %s/%s",
-                          gt, owner_account, folder_path)
+                shares.append({
+                    'owner_email':     owner_account,
+                    'folder_id':       folder_id,
+                    'folder_path':     folder_path,
+                    'rights':          rights or 'r',
+                    'mountpoint_id':   None,
+                    'grantee_account': grantee_raw.strip(),
+                    'grant_type':      'group',
+                    'gt':              gt,
+                })
                 continue
 
             # Expand truncated email via prefix-match against the known account list.
@@ -571,6 +607,8 @@ def parse_getshareinfo(output: str, owner_account: str, all_accounts: set = None
                 'rights':          rights or 'r',
                 'mountpoint_id':   mountpoint_id,
                 'grantee_account': grantee,
+                'grant_type':      'user',
+                'gt':              'usr',
             })
 
     except Exception as exc:
@@ -669,6 +707,7 @@ def parse_getallfolders_mounts(output: str, account: str, all_id_maps: dict = No
                 'folder_id':       folder_id,
                 'mount_path':      mount_path,
                 'owner_account':   owner_account,
+                'remote_id':       remote_id,    # exact untruncated ID from the annotation
                 'remote_folder':   remote_folder,
                 'grantee_account': account,
             })
@@ -744,7 +783,13 @@ def collect_shares_job(job_id: str):
         log.info("[collect] Phase 1 done: %d accounts", len(accounts))
 
         # Phase 2 (5-70%): getShareInfo for each account
-        shares_by_key: dict = {}  # (owner_email, folder_path, grantee_account) -> share dict
+        # Key by folder_id (when available) rather than folder_path to avoid truncation-based
+        # key collisions: gsi's path column is ~20 chars wide, so two different grants whose
+        # paths share a long common prefix (e.g. "/Inbox/Zimbra Virus" and
+        # "/Inbox/Zimbra Virus False Positive Bypass/…") both truncate to the same string and
+        # one would silently overwrite the other in a path-keyed dict.
+        shares_by_key: dict = {}    # (owner_email, folder_id-or-path, grantee_account) -> share dict (user grants only)
+        group_grants_raw: list = []  # group/DL/domain grants — no individual grantee to act on
         total = len(accounts)
         phase2_range = 65  # 5 to 70
 
@@ -758,10 +803,18 @@ def collect_shares_job(job_id: str):
                 )
                 shares = parse_getshareinfo(output, account, active_set)
                 for share in shares:
-                    key = (share['owner_email'], share['folder_path'], share['grantee_account'])
-                    shares_by_key[key] = share
+                    if share.get('grant_type') == 'group':
+                        group_grants_raw.append(share)
+                    else:
+                        fid = share.get('folder_id', '')
+                        if fid and fid != '0':
+                            key = (share['owner_email'], f'id:{fid}', share['grantee_account'])
+                        else:
+                            key = (share['owner_email'], share['folder_path'], share['grantee_account'])
+                        shares_by_key[key] = share
             except Exception as exc:
                 log.warning("[collect] getShareInfo failed for %s: %s", account, exc)
+                write_error_log('collect', account, f'getShareInfo failed: {exc}')
 
         update_job(job_id, progress=70, message=f'Share info collected ({len(shares_by_key)} entries). Collecting folder info...')
         log.info("[collect] Phase 2 done: %d share entries", len(shares_by_key))
@@ -790,6 +843,7 @@ def collect_shares_job(job_id: str):
                 folder_outputs[account] = output
             except Exception as exc:
                 log.warning("[collect] getAllFolders failed for %s: %s", account, exc)
+                write_error_log('collect', account, f'getAllFolders failed: {exc}')
                 id_maps[account] = {}
                 folder_outputs[account] = ''
 
@@ -803,6 +857,7 @@ def collect_shares_job(job_id: str):
                 all_mounts.extend(mounts)
             except Exception as exc:
                 log.warning("[collect] Mount parsing failed for %s: %s", account, exc)
+                write_error_log('collect', account, f'Mount parsing failed: {exc}')
 
         update_job(job_id, progress=90, message='Building manifest records...')
         log.info("[collect] Phase 3 done: %d mounts found", len(all_mounts))
@@ -821,6 +876,92 @@ def collect_shares_job(job_id: str):
 
         log.debug("Phase 4: built mount_lookup with %d entries (root shares should now match)", len(mount_lookup))
 
+        # Build a targeted lookup for truncated folder_id resolution.
+        # Keyed by (owner, grantee) -> list of (remote_id, resolved_remote_folder).
+        # The remote_id comes directly from the mount annotation in getAllFolders and is
+        # never truncated, so it can be used to recover the full ID that gsi cut to 5 chars.
+        mount_remote_ids: dict = {}
+        for _m in all_mounts:
+            _mown = _m.get('owner_account')
+            _mgra = _m.get('grantee_account')
+            _mrid = _m.get('remote_id')
+            _mrfp = _m.get('remote_folder')
+            if _mown and _mgra and _mrid and _mrfp:
+                mount_remote_ids.setdefault((_mown, _mgra), []).append((_mrid, _mrfp))
+
+        def _resolve_folder_id(folder_id: str, owner: str, grantee: str) -> str | None:
+            """Exact id_map lookup, then targeted mount-based prefix fallback."""
+            if not folder_id or folder_id == '0':
+                return None
+            resolved = id_maps.get(owner, {}).get(str(folder_id))
+            if not resolved and len(str(folder_id)) == 5:
+                # gsi id column is 5 chars — a 6-digit ID is truncated to 5.
+                # Check the grantee's actual mounts for this owner: the mount annotation
+                # contains the exact untruncated remote_id, so prefix-matching here is
+                # safe — it's bounded to mounts between this specific (owner, grantee) pair.
+                pfx = str(folder_id)
+                cands = [rfp for rid, rfp in mount_remote_ids.get((owner, grantee), [])
+                         if str(rid).startswith(pfx) and len(str(rid)) > 5]
+                # Deduplicate by path: the same source folder can be mounted twice under
+                # different local names, producing multiple cands with the same remote_id
+                # and the same resolved path — that is still unambiguous.
+                unique_cands = list(dict.fromkeys(cands))
+                if len(unique_cands) == 1:
+                    resolved = unique_cands[0]
+                    log.debug("Phase 4: folder_id %r resolved via mount remote_id prefix to %r (%s->%s)",
+                              folder_id, resolved, owner, grantee)
+                elif unique_cands:
+                    log.debug("Phase 4: folder_id %r ambiguous (%d distinct mount paths) for %s->%s",
+                              folder_id, len(unique_cands), owner, grantee)
+            return resolved
+
+        # Resolve group/DL grant folder paths and build a lookup keyed by (owner, norm_folder).
+        # For group grants we don't know the individual grantee, so the fallback searches all
+        # mounts from that owner (across all grantees) rather than the grantee-specific set.
+        owner_mount_remote_ids: dict = {}
+        for _m in all_mounts:
+            _mown = _m.get('owner_account')
+            _mrid = _m.get('remote_id')
+            _mrfp = _m.get('remote_folder')
+            if _mown and _mrid and _mrfp:
+                owner_mount_remote_ids.setdefault(_mown, []).append((_mrid, _mrfp))
+
+        group_grant_folder_set: dict = {}  # (owner, norm_folder) -> {'dl': str, 'rights': str}
+        for _gg in group_grants_raw:
+            _own = _gg['owner_email']
+            _fp  = _gg['folder_path']
+            _fid = _gg.get('folder_id', '')
+            _res = id_maps.get(_own, {}).get(str(_fid)) if (_fid and _fid != '0') else None
+            if not _res and _fid and len(str(_fid)) == 5:
+                _pfx = str(_fid)
+                _oc = list(dict.fromkeys(
+                    rfp for rid, rfp in owner_mount_remote_ids.get(_own, [])
+                    if str(rid).startswith(_pfx) and len(str(rid)) > 5
+                ))
+                if len(_oc) == 1:
+                    _res = _oc[0]
+            if _res:
+                _fp = _res
+            _norm = normalize_folder(_fp)
+            if _norm and _own and (_own, _norm) not in group_grant_folder_set:
+                group_grant_folder_set[(_own, _norm)] = {
+                    'dl': _gg.get('grantee_account', ''),
+                    'rights': _gg.get('rights', ''),
+                }
+        log.info("[collect] Phase 4: %d group-grant-covered folder(s) found", len(group_grant_folder_set))
+
+        # Pre-pass: resolve every grant's folder path (via id_maps) into a normalized set so
+        # that mount_is_inherited checks use resolved paths, not the raw truncated gsi paths
+        # that are now used as keys in shares_by_key.
+        resolved_norm_grant_set: set = set()
+        for _, _pre_share in shares_by_key.items():
+            _own = _pre_share['owner_email']
+            _fp  = _pre_share['folder_path']
+            _res = _resolve_folder_id(_pre_share.get('folder_id', ''), _own, _pre_share['grantee_account'])
+            if _res:
+                _fp = _res
+            resolved_norm_grant_set.add((_own, normalize_folder(_fp), _pre_share['grantee_account']))
+
         matched_mount_keys: set = set()
 
         # Records from shares_by_key (grants)
@@ -830,13 +971,16 @@ def collect_shares_job(job_id: str):
             grantee     = share['grantee_account']
             mountpoint_id = share.get('mountpoint_id')
 
-            # Resolve full folder path via id_maps — the 'path' column in zmprov gsi
-            # is only 20 chars wide and may be truncated for longer paths
+            # Resolve full folder path via id_maps (with truncated-ID fallback).
+            # Both the 'id' column (5 chars) and 'path' column (20 chars) in zmprov gsi
+            # are too narrow for deep folder paths, so either can be truncated.
+            # _resolve_folder_id handles exact lookup and, when that fails, matches the
+            # 5-char truncated ID against the grantee's mount remote_ids for this owner —
+            # a targeted check bounded to this specific (owner, grantee) pair.
             folder_id = share.get('folder_id', '')
-            if folder_id and owner_email in id_maps:
-                resolved = id_maps[owner_email].get(str(folder_id))
-                if resolved:
-                    folder_path = resolved
+            resolved = _resolve_folder_id(folder_id, owner_email, grantee)
+            if resolved:
+                folder_path = resolved
 
             # --- Detect mount ---
             # Primary: use mid from gsi (populated in some Zimbra versions)
@@ -881,8 +1025,10 @@ def collect_shares_job(job_id: str):
                         # Only suppress as inherited when the parent grant itself is also in the
                         # manifest — if only the parent mount is present (orphaned), keep this
                         # record visible as a standalone share.
+                        # Use resolved_norm_grant_set (not shares_by_key) because keys in
+                        # shares_by_key are now id-based to avoid truncation collisions.
                         parent_grant_key = (owner_email, parent_folder, grantee)
-                        mount_is_inherited = parent_grant_key in shares_by_key
+                        mount_is_inherited = parent_grant_key in resolved_norm_grant_set
 
             records.append({
                 'id': make_record_id(owner_email, folder_path, grantee),
@@ -894,6 +1040,7 @@ def collect_shares_job(job_id: str):
                 'has_grant': True,
                 'has_mount': has_mount,
                 'mount_is_inherited': mount_is_inherited,
+                'grant_via_group': None,
                 'source_orphaned': owner_email not in active_set,
                 'grantee_orphaned': grantee not in active_set,
                 'keep': 1,
@@ -909,15 +1056,20 @@ def collect_shares_job(job_id: str):
             norm_folder = normalize_folder(remote)
             mount_key = (owner, norm_folder, grantee)
             if mount_key not in matched_mount_keys:
+                # Check if this mount is backed by a group/DL grant on the same folder.
+                # If so, the mount is legitimate even though no individual grant exists.
+                group_grant = group_grant_folder_set.get((owner, norm_folder))
                 records.append({
                     'id': make_record_id(owner, remote, grantee),
                     'source_account': owner,
                     'source_folder': remote,
-                    'permissions': '',
+                    'permissions': group_grant['rights'] if group_grant else '',
                     'grantee_account': grantee,
                     'grantee_mountpoint': mount.get('mount_path'),
-                    'has_grant': False,
+                    'has_grant': group_grant is not None,
                     'has_mount': True,
+                    'mount_is_inherited': False,
+                    'grant_via_group': group_grant['dl'] if group_grant else None,
                     'source_orphaned': owner not in active_set,
                     'grantee_orphaned': grantee not in active_set,
                     'keep': 1,
@@ -1057,6 +1209,7 @@ def apply_cleanup_job(job_id: str):
                 else:
                     err = f"Grant failed {source}/{folder} -> {grantee}: {exc}"
                     log.error("[apply] %s", err)
+                    write_error_log('apply', f'{source} → {grantee}', f'Grant creation failed on {folder}: {exc}', level='error')
                     error_details.append({'type': 'grant_creation', 'source': source,
                                           'folder': folder, 'grantee': grantee, 'error': str(exc)})
                     continue
@@ -1138,6 +1291,7 @@ def apply_cleanup_job(job_id: str):
                 except Exception as exc:
                     msg = f"Grant removal failed {source}/{folder} -> {grantee}: {exc}"
                     log.error("[apply] %s", msg)
+                    write_error_log('apply', f'{source} → {grantee}', f'Grant removal failed on {folder}: {exc}', level='error')
                     error_details.append({'type': 'grant_removal', 'source': source,
                                           'folder': folder, 'grantee': grantee, 'error': str(exc)})
 
@@ -1154,6 +1308,7 @@ def apply_cleanup_job(job_id: str):
                 except Exception as exc:
                     msg = f"Mount deletion failed {grantee}/{mount_path}: {exc}"
                     log.error("[apply] %s", msg)
+                    write_error_log('apply', grantee, f'Mount deletion failed on {mount_path}: {exc}', level='error')
                     error_details.append({'type': 'mount_deletion', 'grantee': grantee,
                                           'mount_path': mount_path, 'error': str(exc)})
 
@@ -1288,6 +1443,7 @@ def apply_migration_job(job_id: str):
             except Exception as exc:
                 err = f"Grant failed {source}/{folder} -> {grantee}: {exc}"
                 log.error("[migration] %s", err)
+                write_error_log('migration', f'{source} → {grantee}', f'Grant creation failed on {folder}: {exc}', level='error')
                 error_details.append({'type': 'grant_creation', 'source': source,
                                       'folder': folder, 'grantee': grantee, 'error': str(exc)})
                 continue
@@ -1425,7 +1581,14 @@ def delete_all_shares_job(job_id: str):
         total = len(accounts)
         log.info("[delete-all] Starting: %d accounts to scan", total)
 
-        # Phase 1 (5-35%): collect every outgoing grant via getShareInfo
+        # gsi 'gt' value -> zmmailbox modifyFolderGrant grantee-type parameter
+        _GT_TO_ZMBOX = {
+            'usr': 'account', 'grp': 'group', 'dom': 'domain',
+            'pub': 'public',  'cos': 'cos',   'all': 'all', '': 'account',
+        }
+
+        # Phase 1 (5-35%): collect every outgoing grant via getShareInfo.
+        # Store folder_id so Phase 2.5 can resolve truncated paths via id_maps.
         all_grants: list = []
         for idx, account in enumerate(accounts):
             pct = 5 + int((idx / max(total, 1)) * 30)
@@ -1437,9 +1600,11 @@ def delete_all_shares_job(job_id: str):
                 shares = parse_getshareinfo(output, account, active_set)
                 for share in shares:
                     all_grants.append({
-                        'owner':   share['owner_email'],
-                        'folder':  share['folder_path'],
-                        'grantee': share['grantee_account'],
+                        'owner':     share['owner_email'],
+                        'folder':    share['folder_path'],
+                        'folder_id': share.get('folder_id', ''),
+                        'grantee':   share['grantee_account'],
+                        'gt':        share.get('gt', 'usr'),
                     })
             except Exception as exc:
                 log.warning("[delete-all] gsi failed for %s: %s", account, exc)
@@ -1476,7 +1641,38 @@ def delete_all_shares_job(job_id: str):
 
         log.info("[delete-all] Found %d mounts", len(all_mounts_raw))
 
-        # Phase 3 (55-78%): remove all grants
+        # Phase 2.5: resolve truncated grant folder paths via id_maps.
+        # gsi's id column is 5 chars wide — 6-digit folder IDs are truncated — and
+        # the path column is 20 chars wide. Use the same two-stage resolution as the
+        # collect job: exact id_map lookup, then prefix-match against mount remote_ids.
+        _del_owner_mounts: dict = {}
+        for _m in all_mounts_raw:
+            _mown = _m.get('owner_account')
+            _mrid = _m.get('remote_id')
+            _mrfp = _m.get('remote_folder')
+            if _mown and _mrid and _mrfp:
+                _del_owner_mounts.setdefault(_mown, []).append((_mrid, _mrfp))
+
+        for grant in all_grants:
+            fid = grant.get('folder_id', '')
+            if not fid or fid == '0':
+                continue
+            owner = grant['owner']
+            resolved = id_maps.get(owner, {}).get(str(fid))
+            if not resolved and len(str(fid)) == 5:
+                pfx = str(fid)
+                cands = list(dict.fromkeys(
+                    rfp for rid, rfp in _del_owner_mounts.get(owner, [])
+                    if str(rid).startswith(pfx) and len(str(rid)) > 5
+                ))
+                if len(cands) == 1:
+                    resolved = cands[0]
+            if resolved:
+                grant['folder'] = resolved
+
+        log.info("[delete-all] Grant path resolution complete")
+
+        # Phase 3 (55-78%): remove all grants using resolved paths and correct grantee type
         grant_total = len(all_grants)
         update_job(job_id, progress=55, message=f'Removing {grant_total} grants...')
         for idx, grant in enumerate(all_grants):
@@ -1484,16 +1680,18 @@ def delete_all_shares_job(job_id: str):
                 pct = 55 + int((idx / max(grant_total, 1)) * 23)
                 update_job(job_id, progress=pct,
                            message=f'Removing grants: {idx+1}/{grant_total}...')
+            zmbox_type = _GT_TO_ZMBOX.get(grant.get('gt', ''), 'account')
             try:
                 zimbra_cmd_with_retry(
                     ['zmmailbox', '-z', '-m', grant['owner'],
-                     'modifyFolderGrant', grant['folder'], 'account', grant['grantee'], 'none'],
+                     'modifyFolderGrant', grant['folder'], zmbox_type, grant['grantee'], 'none'],
                     timeout=60,
                 )
                 removed_grants += 1
             except Exception as exc:
                 log.error("[delete-all] Grant removal failed %s/%s->%s: %s",
                           grant['owner'], grant['folder'], grant['grantee'], exc)
+                write_error_log('delete_all', f"{grant['owner']} → {grant['grantee']}", f"Grant removal failed on {grant['folder']}: {exc}", level='error')
                 error_details.append({
                     'type': 'grant_removal', 'owner': grant['owner'],
                     'folder': grant['folder'], 'grantee': grant['grantee'], 'error': str(exc),
@@ -1517,6 +1715,7 @@ def delete_all_shares_job(job_id: str):
             except Exception as exc:
                 log.error("[delete-all] Mount deletion failed %s:%s: %s",
                           mount['grantee_account'], mount['mount_path'], exc)
+                write_error_log('delete_all', mount['grantee_account'], f"Mount deletion failed on {mount['mount_path']}: {exc}", level='error')
                 error_details.append({
                     'type': 'mount_deletion', 'grantee': mount['grantee_account'],
                     'mount_path': mount['mount_path'], 'error': str(exc),
@@ -1808,6 +2007,40 @@ def api_audit_log():
                 except json.JSONDecodeError:
                     pass
         return jsonify({'entries': list(reversed(entries[-100:]))})
+    except Exception as exc:
+        return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/errors/log')
+def api_errors_log():
+    """Return the most recent errors.log entries (newest first, max 200)."""
+    if not ERRORS_FILE.exists():
+        return jsonify({'entries': []})
+    try:
+        with open(ERRORS_FILE, 'r', encoding='utf-8') as fh:
+            lines = fh.readlines()
+        entries = []
+        for line in lines:
+            line = line.strip()
+            if line:
+                try:
+                    entries.append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass
+        return jsonify({'entries': list(reversed(entries[-200:]))})
+    except Exception as exc:
+        return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/errors/clear', methods=['POST'])
+def api_errors_clear():
+    """Truncate errors.log."""
+    try:
+        with _errors_lock:
+            with open(ERRORS_FILE, 'w', encoding='utf-8') as fh:
+                fh.truncate(0)
+        log.info("errors.log cleared")
+        return jsonify({'success': True})
     except Exception as exc:
         return jsonify({'error': str(exc)}), 500
 
